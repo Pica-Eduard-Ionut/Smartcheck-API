@@ -3,7 +3,13 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+
     container_name: smart-api-drogua
+
     ports:
       - "8000:5555"
+
+    volumes:
+      - /opt/homelab_smartcheck/logs:/app/logs:ro
+
     restart: unless-stopped
