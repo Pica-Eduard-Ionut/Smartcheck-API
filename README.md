@@ -2,9 +2,11 @@
 
 ## Overview
 
-A small FastAPI microservice that reads SMART disk health logs and exposes the parsed data through an API.
+A lightweight, high-performance microservice built with the **Drogua (Lua)** framework that reads SMART disk health logs and exposes the parsed data through a REST API. 
 
 The SMART check itself is managed separately by the [Homelab-Config SmartCheck](https://github.com/Pica-Eduard-Ionut/Homelab-Config/tree/main/server/scripts/smartcheck/README.md) configuration.
+
+(There is also a FastAPI version in the folder `python` that I used previously)
 
 ## API
 
@@ -29,14 +31,20 @@ The API runs on port `8000`.
 
 ```text
 .
-├── app.py
-├── requirements.txt
-├── Containerfile
+├── app.lua
 ├── compose.yaml
+├── Containerfile
+├── drogua
+├── lib
+├── LICENSE
+├── Python
 └── README.md
 ```
-
-* `app.py` - FastAPI application that reads and parses the SMART log files.
+* `app.lua` - Drogua application that reads, parses, and serves the SMART log files asynchronously.
+* `config.json` - Drogua framework configuration (logging, threading, etc.).
+* `drogua` - Drogua framework executable for building the docker.
+* `lib` - Runtime dependencies for the drogua executable that are added to the docker.
+* `Python` - Alternative FastAPI application that reads and parses the SMART log files.
 * `requirements.txt` - Python dependencies for the application.
 * `Containerfile` - Defines the container image for the API.
 * `compose.yaml` - Defines the container, port mapping, volume, and restart policy.

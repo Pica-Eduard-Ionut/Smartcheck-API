@@ -1,0 +1,12 @@
+services:
+  homelab-smartcheck-api:
+    build:
+      context: .
+      dockerfile: Containerfile
+
+    container_name: smartcheck-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - /opt/homelab_smartcheck/logs:/app/logs:ro
+    restart: unless-stopped

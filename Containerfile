@@ -1,13 +1,14 @@
-FROM python:3.13-slim
+FROM alpine:3.24.2
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY drogua /app/drogua
+COPY lib/ /app/lib/
+COPY app.lua /app/app.lua
+COPY config.json /app/config.json
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN chmod +x /app/drogua
 
-COPY app.py .
+EXPOSE 5555
 
-EXPOSE 8000
-
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/drogua"]
