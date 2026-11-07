@@ -8,17 +8,24 @@ Drogua.print("Drogua SMARTcheck API started!")
 
 local OUTPUT_DIR = "./logs"
 
--- Extract an integer from a value, even if extra text follows.
+-- ============================================================
+-- Extract integer from a string
+-- ============================================================
+
 local function extractNumber(value)
     if not value then
         return 0
     end
 
     local number = tostring(value):match("^%s*([+-]?%d+)")
+
     return tonumber(number) or 0
 end
 
--- Parse a SMART attribute line.
+-- ============================================================
+-- Parse SMART attribute line
+-- ============================================================
+
 local function parseAttribute(line)
     local id, name, flag, value, worst, thresh, attr_type, updated, when_failed, raw_value =
         line:match("^%s*(%d+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(.+)$")
@@ -40,7 +47,10 @@ local function parseAttribute(line)
     }
 end
 
--- Read all SMART attributes from one file.
+-- ============================================================
+-- Read SMART attributes from file
+-- ============================================================
+
 local function readSmartFile(filepath)
     local attributes = {}
 
@@ -48,11 +58,16 @@ local function readSmartFile(filepath)
 
     if not file then
         Drogua.print("Cannot open file: " .. filepath .. " (" .. tostring(err) .. ")")
+
         return attributes
     end
 
-    for line in file:lines() do
-        line = line:match("^%s*(.-)%s*$")
+    for original_line in file:lines() do
+        -- IMPORTANT:
+        -- Never modify the generic-for loop variable.
+        -- Drogua treats it as a const variable.
+
+        local line = original_line:match("^%s*(.-)%s*$")
 
         if line ~= "" and line:match("^%d+%s+") then
             local name, attribute = parseAttribute(line)
@@ -68,7 +83,10 @@ local function readSmartFile(filepath)
     return attributes
 end
 
--- Get one metric safely.
+-- ============================================================
+-- Get raw SMART attribute value
+-- ============================================================
+
 local function getRaw(attributes, name)
     local attribute = attributes[name]
 
@@ -79,13 +97,17 @@ local function getRaw(attributes, name)
     return extractNumber(attribute.raw_value)
 end
 
+-- ============================================================
+-- SMART Logs API
+-- ============================================================
+
 Drogua.Routes.getAsync(
     "/logs",
     function(req)
-        -- Query parameter
+        -- Read query parameter
         local limit = tonumber(req:query("limit")) or 30
 
-        -- Reject NaN/infinite values and normalize fractional limits.
+        -- Validate limit
         if limit ~= limit or limit == math.huge or limit == -math.huge then
             limit = 30
         end
@@ -94,8 +116,12 @@ Drogua.Routes.getAsync(
 
         local logs = {}
 
-        -- Find TXT files.
+        -- ========================================================
+        -- Find log files
+        -- ========================================================
+
         local command = 'ls -1 "' .. OUTPUT_DIR .. '"/*.txt 2>/dev/null'
+
         local handle = io.popen(command)
 
         if not handle then
@@ -111,40 +137,62 @@ Drogua.Routes.getAsync(
 
         handle:close()
 
-        -- Read files.
+        -- ========================================================
+        -- Process log files
+        -- ========================================================
+
         for _, filepath in ipairs(files) do
             local filename = filepath:match("([^/\\]+)$")
 
             if filename then
-                local year, month, day = filename:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)%.txt$")
+                -- Expected filename: YYYY-MM-DD.txt
 
-                year = tonumber(year)
-                month = tonumber(month)
-                day = tonumber(day)
+                local year_str, month_str, day_str = filename:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)%.txt$")
+
+                local year = tonumber(year_str)
+                local month = tonumber(month_str)
+                local day = tonumber(day_str)
 
                 if year and month and day and month >= 1 and month <= 12 and day >= 1 and day <= 31 then
                     local attributes = readSmartFile(filepath)
 
+                    -- Temperature
                     local temp = attributes["Temperature_Celsius"]
+
+                    local temperature = temp and extractNumber(temp.raw_value) or 0
+
+                    -- Power-on hours
+                    local power_on_hours = getRaw(attributes, "Power_On_Hours")
+
+                    -- SSD wear percentage
                     local wear = attributes["Media_Wearout_Indicator"]
 
+                    local wear_percent = wear and (tonumber(wear.value) or 0) or 0
+
+                    -- Power cycles
+                    local power_cycles = getRaw(attributes, "Power_Cycle_Count")
+
+                    -- Add log entry
                     table.insert(
                         logs,
                         {
                             year = year,
                             month = month,
                             day = day,
-                            temperature = temp and extractNumber(temp.raw_value) or 0,
-                            power_on_hours = getRaw(attributes, "Power_On_Hours"),
-                            wear_percent = wear and (tonumber(wear.value) or 0) or 0,
-                            power_cycles = getRaw(attributes, "Power_Cycle_Count")
+                            temperature = temperature,
+                            power_on_hours = power_on_hours,
+                            wear_percent = wear_percent,
+                            power_cycles = power_cycles
                         }
                     )
                 end
             end
         end
 
-        -- Newest first.
+        -- ========================================================
+        -- Sort newest first
+        -- ========================================================
+
         table.sort(
             logs,
             function(a, b)
@@ -160,19 +208,30 @@ Drogua.Routes.getAsync(
             end
         )
 
-        -- Limit <= 0 means return everything.
+        -- ========================================================
+        -- Apply limit
+        -- ========================================================
+
+        -- 0 or negative = return all logs
+
         if limit <= 0 then
             return logs
         end
 
         local result = {}
 
-        for i = 1, math.min(limit, #logs) do
+        local max_items = math.min(limit, #logs)
+
+        for i = 1, max_items do
             result[#result + 1] = logs[i]
         end
 
         return result
     end
 )
+
+-- ============================================================
+-- Start application
+-- ============================================================
 
 Drogua.app():run()
