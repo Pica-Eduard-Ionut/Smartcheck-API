@@ -6,142 +6,173 @@ Drogua.print("Drogua SMARTcheck API started!")
 -- SMART Disk Monitor API
 -- ============================================================
 
-Drogua.Routes.getAsync("/logs", function(req)
-    -- Get limit from query string, default to 30
-    local limit_str = req:query("limit") or "30"
-    local limit = tonumber(limit_str) or 30
-    local output_dir = "logs"
+local OUTPUT_DIR = "./logs"
 
-    local logs = {}
+-- Extract an integer from a value, even if extra text follows.
+local function extractNumber(value)
+    if not value then
+        return 0
+    end
 
-    -- List all .txt files in the logs directory
-    -- Linux/macOS compatible
-    -- Windows alternative:
-    -- 'dir /b "' .. output_dir .. '\\*.txt" 2>nul'
-    local handle = io.popen('ls -1 "' .. output_dir .. '"/*.txt 2>/dev/null')
+    local number = tostring(value):match("^%s*([+-]?%d+)")
+    return tonumber(number) or 0
+end
 
-    if handle then
-        local result = handle:read("*a")
-        handle:close()
+-- Parse a SMART attribute line.
+local function parseAttribute(line)
+    local id, name, flag, value, worst, thresh, attr_type, updated, when_failed, raw_value =
+        line:match("^%s*(%d+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(.+)$")
 
-        for filepath in result:gmatch("[^\r\n]+") do
+    if not id then
+        return nil, nil
+    end
 
-            -- Extract just the filename from the path
-            local basename = filepath:match("([^/\\]+)$")
+    return name, {
+        id = tonumber(id),
+        flag = flag,
+        value = tonumber(value) or 0,
+        worst = tonumber(worst) or 0,
+        thresh = thresh,
+        type = attr_type,
+        updated = updated,
+        when_failed = when_failed,
+        raw_value = raw_value
+    }
+end
 
-            if basename and basename:match("%.txt$") then
+-- Read all SMART attributes from one file.
+local function readSmartFile(filepath)
+    local attributes = {}
 
-                -- Extract year, month, and day
-                -- Lua strings are 1-indexed
-                local year = tonumber(basename:sub(1, 4))
-                local month = tonumber(basename:sub(6, 7))
-                local day = tonumber(basename:sub(9, 10))
+    local file, err = io.open(filepath, "r")
 
-                if year and month and day then
+    if not file then
+        Drogua.print("Cannot open file: " .. filepath .. " (" .. tostring(err) .. ")")
+        return attributes
+    end
 
-                    local attributes = {}
-                    local file = io.open(filepath, "r")
+    for line in file:lines() do
+        line = line:match("^%s*(.-)%s*$")
 
-                    if file then
+        if line ~= "" and line:match("^%d+%s+") then
+            local name, attribute = parseAttribute(line)
 
-                        for line in file:lines() do
-
-                            -- Strip leading/trailing whitespace
-                            line = line:match("^%s*(.-)%s*$")
-
-                            -- Check if line starts with a digit
-                            if line ~= "" and line:match("^%d") then
-
-                                -- Split into 9 words and the remaining text
-                                local p1, p2, p3, p4, p5, p6, p7, p8, p9, p10 = line:match(
-                                    "^%s*(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(%S+)%s+(.*)$")
-
-                                if p1 then
-                                    attributes[p2] = {
-                                        id = tonumber(p1),
-                                        flag = p3,
-                                        value = tonumber(p4),
-                                        worst = tonumber(p5),
-                                        thresh = p6,
-                                        type = p7,
-                                        updated = p8,
-                                        when_failed = p9,
-                                        raw_value = p10
-                                    }
-                                end
-                            end
-                        end
-
-                        file:close()
-                    end
-
-                    -- Extract required metrics safely (fallback to 0)
-
-                    -- Temperature
-                    local temp_attr = attributes["Temperature_Celsius"]
-                    local temperature = 0
-
-                    if temp_attr and temp_attr.raw_value then
-                        local first_word = temp_attr.raw_value:match("^%s*(%S+)")
-                        temperature = tonumber(first_word) or 0
-                    end
-
-                    -- Power-on hours
-                    local poh_attr = attributes["Power_On_Hours"]
-                    local power_on_hours = tonumber(poh_attr and poh_attr.raw_value) or 0
-
-                    -- Media wearout indicator
-                    local wear_attr = attributes["Media_Wearout_Indicator"]
-                    local wear_percent = tonumber(wear_attr and wear_attr.value) or 0
-
-                    -- Power cycle count
-                    local cycles_attr = attributes["Power_Cycle_Count"]
-                    local power_cycles = tonumber(cycles_attr and cycles_attr.raw_value) or 0
-
-                    -- Add log entry
-                    table.insert(logs, {
-                        year = year,
-                        month = month,
-                        day = day,
-                        temperature = temperature,
-                        power_on_hours = power_on_hours,
-                        wear_percent = wear_percent,
-                        power_cycles = power_cycles
-                    })
-
-                end
+            if name then
+                attributes[name] = attribute
             end
         end
     end
 
-    -- Sort logs by date descending (newest first)
-    table.sort(logs, function(a, b)
-        if a.year ~= b.year then
-            return a.year > b.year
+    file:close()
+
+    return attributes
+end
+
+-- Get one metric safely.
+local function getRaw(attributes, name)
+    local attribute = attributes[name]
+
+    if not attribute then
+        return 0
+    end
+
+    return extractNumber(attribute.raw_value)
+end
+
+Drogua.Routes.getAsync(
+    "/logs",
+    function(req)
+        -- Query parameter
+        local limit = tonumber(req:query("limit")) or 30
+
+        -- Reject NaN/infinite values and normalize fractional limits.
+        if limit ~= limit or limit == math.huge or limit == -math.huge then
+            limit = 30
         end
 
-        if a.month ~= b.month then
-            return a.month > b.month
+        limit = math.floor(limit)
+
+        local logs = {}
+
+        -- Find TXT files.
+        local command = 'ls -1 "' .. OUTPUT_DIR .. '"/*.txt 2>/dev/null'
+        local handle = io.popen(command)
+
+        if not handle then
+            Drogua.print("ERROR: Unable to list log directory")
+            return logs
         end
 
-        return a.day > b.day
-    end)
+        local files = {}
 
-    -- Apply limit
-    -- 0 or less means return all logs
-    if limit <= 0 then
-        return logs
-    else
+        for filepath in handle:lines() do
+            table.insert(files, filepath)
+        end
+
+        handle:close()
+
+        -- Read files.
+        for _, filepath in ipairs(files) do
+            local filename = filepath:match("([^/\\]+)$")
+
+            if filename then
+                local year, month, day = filename:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)%.txt$")
+
+                year = tonumber(year)
+                month = tonumber(month)
+                day = tonumber(day)
+
+                if year and month and day and month >= 1 and month <= 12 and day >= 1 and day <= 31 then
+                    local attributes = readSmartFile(filepath)
+
+                    local temp = attributes["Temperature_Celsius"]
+                    local wear = attributes["Media_Wearout_Indicator"]
+
+                    table.insert(
+                        logs,
+                        {
+                            year = year,
+                            month = month,
+                            day = day,
+                            temperature = temp and extractNumber(temp.raw_value) or 0,
+                            power_on_hours = getRaw(attributes, "Power_On_Hours"),
+                            wear_percent = wear and (tonumber(wear.value) or 0) or 0,
+                            power_cycles = getRaw(attributes, "Power_Cycle_Count")
+                        }
+                    )
+                end
+            end
+        end
+
+        -- Newest first.
+        table.sort(
+            logs,
+            function(a, b)
+                if a.year ~= b.year then
+                    return a.year > b.year
+                end
+
+                if a.month ~= b.month then
+                    return a.month > b.month
+                end
+
+                return a.day > b.day
+            end
+        )
+
+        -- Limit <= 0 means return everything.
+        if limit <= 0 then
+            return logs
+        end
+
         local result = {}
-        local max_items = math.min(limit, #logs)
 
-        for i = 1, max_items do
-            table.insert(result, logs[i])
+        for i = 1, math.min(limit, #logs) do
+            result[#result + 1] = logs[i]
         end
 
         return result
     end
-
-end)
+)
 
 Drogua.app():run()
