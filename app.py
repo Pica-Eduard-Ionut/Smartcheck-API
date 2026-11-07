@@ -53,7 +53,12 @@ def get_logs(limit: int = 30):
             "power_cycles": int(attributes["Power_Cycle_Count"]["raw_value"]),
         })
 
-        logs.sort(key=lambda x: (x["year"], x["month"], x["day"]), reverse=True)
+    # PERFORMANCE FIX: Moved outside the loop so it only sorts once
+    logs.sort(key=lambda x: (x["year"], x["month"], x["day"]), reverse=True)
+
+    # NEW: If limit is 0 or negative, return all logs
+    if limit <= 0:
+        return logs
 
     return logs[:limit]
 
