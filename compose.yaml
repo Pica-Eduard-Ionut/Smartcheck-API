@@ -1,10 +1,10 @@
 services:
-  smart-api-drogua:
+  homelab-smartcheck-api:
     build:
       context: .
       dockerfile: Containerfile
 
-    container_name: smart-api-drogua
+    container_name: smartcheck-api
 
     ports:
       - "8000:5555"
